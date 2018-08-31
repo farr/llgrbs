@@ -3,6 +3,7 @@
 functions {
 
   // transform flux into luminosity
+  // for now this is WRONG
   real transform(real x, real z) {
     return x * (z+1)^2 ; 
   }
@@ -13,7 +14,7 @@ functions {
     return r0 * (1.0 + z)^(index);
   }
   
-  
+  // Integrand of the rate
   real[] N_integrand(real z, real[] state, real[] params, real[] x_r, int[] x_i) {
     
     real r0;
@@ -63,7 +64,8 @@ transformed data {
   vector[N_margin] log_gamma;
 
   zout[1] = z_max;
-  
+
+  // precompute for speed
   for (n in 1:N_margin) {
     log_gamma[n] = lgamma(n+1);
   }
@@ -72,16 +74,16 @@ transformed data {
 
 parameters {
 
-  
-  real<lower=0> alpha;
-  real<lower=0> Lstar;  
-  real<lower=0> r0;
-  real index;
+  // Phi(L) and dNdZ(z) parameters
+  real<lower=0> alpha; // phi index 
+  real<lower=0> Lstar; // phi lower bound
+  real<lower=0> r0; // local rate
+  real index; // formation fall off
 
-  
+  // latent luminosities
   vector<lower=Lstar>[N] L_latent;
 
-
+  // auxilliary population
   vector<lower=0,upper=boundary>[N_margin] F_tilde;
   vector<lower=Lstar>[N_margin] L_tilde_latent;
   vector<lower=0,upper=z_max>[N_margin] z_tilde_latent;
@@ -104,19 +106,17 @@ model {
   vector[N_margin + 1] log_prob_margin;  
 
   // setup for the integral
-  real Lambda;
+  real Lambda; // this is total Lambda!
+  
   real params[2];
   real integration_result[1,1];
   real state0[1];
-
-
 
 
   // positive definite priors for the intensity
   r0 ~ lognormal(log(100.0), 1.0);
   index ~ normal(-1.0, 1.0);
   
-
   // priors for distributions
   alpha ~ normal(1.0, 1.0);
   Lstar ~ lognormal(log(1.0), 1.0);
@@ -130,14 +130,19 @@ model {
     target += log(dNdz(z_obs[n], r0, index));
   }
   
-  // (Distinguishiable) Poisson process model
+  
 
   // Measurement model for auxiliary objects  
   L_tilde_latent ~  pareto(Lstar, alpha);
-  
-  target += uniform_lpdf(z_tilde_latent| 0, z_max);
-  target += uniform_lpdf(F_tilde |0,  boundary);
 
+  // normalize with the offset distributions
+  //  target += uniform_lpdf(z_tilde_latent| 0, z_max);
+  //target += uniform_lpdf(F_tilde |0,  boundary);
+
+  // these norms give me a headache
+  // I'm not really sure if they are correct
+
+  
   
   log_prob_margin[1] = 0;
   sum_log_prob_tilde = log_prob_margin[1];
@@ -146,8 +151,8 @@ model {
   for (n in 1:N_margin) {
     
     sum_log_prob_tilde += log(dNdz(z_tilde_latent[n], r0, index))
-      - uniform_lpdf(F_tilde[n] | 0, boundary)
-      - uniform_lpdf(z_tilde_latent[n]| 0, z_max)
+      - uniform_lpdf(F_tilde[n] | 0, boundary) // remove excess prob
+      - uniform_lpdf(z_tilde_latent[n]| 0, z_max) // remove excess prob
       + lognormal_lpdf(L_tilde_transformed[n] | log(L_tilde_latent[n]), sigma_L);
 
       
@@ -172,6 +177,7 @@ model {
   integration_result = integrate_ode_rk45(N_integrand, state0, 0.0, zout, params, x_r, x_i);
   Lambda = integration_result[1,1];
 
+  // (Distinguishiable) Poisson process model
   target += - Lambda;
 
 }
