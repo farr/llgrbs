@@ -10,23 +10,55 @@ functions {
   
   
   // variable Poisson intensity
-  real dNdz(real z, real r0, real index) {
-    return r0 * (1.0 + z)^(index);
+  vector dNdz(vector z, real r0, real rise, real decay, real peak) {
+
+    int N = num_elements(z);
+
+    vector[N] bottom;
+    vector[N] top;
+    vector[N] frac;
+
+    top = r0 * (1.0 + z);
+    frac = z/peak;
+    for (n in 1:N) {
+
+      bottom[n] = 1+frac[n]^decay;
+
+    }
+
+    return top ./ bottom;
   }
+
   
+ real dNdz_int(real z, real r0, real rise, real decay, real peak) {
+    real bottom;
+    real  top;
+    
+
+    top = r0 * (1.0 + z);
+    bottom =1+(z/peak)^decay;
+    
+
+    return top / bottom;
+  }
+
   // Integrand of the rate
   real[] N_integrand(real z, real[] state, real[] params, real[] x_r, int[] x_i) {
     
     real r0;
-    real index;
+    real rise;
+    real decay;
+    real peak;
     
     real dstatedz[1];
     
     r0 = params[1];
-    index = params[2];
+    rise = params[2];
+    decay = params[3];
+    peak = params[4];
     
     
-    dstatedz[1] = dNdz(z, r0, index);
+    dstatedz[1] = dNdz_int(z, r0, rise, decay, peak);
     
     return dstatedz;
   }
@@ -78,7 +110,9 @@ parameters {
   real<lower=0> alpha; // phi index 
   real<lower=0> Lstar; // phi lower bound
   real<lower=0> r0; // local rate
-  real index; // formation fall off
+  real<lower=0> rise; // formation fall off
+  real<lower=0> decay; // formation fall off
+  real<lower=0, upper=z_max> peak; // formation fall off
 
   // latent luminosities
   vector<lower=Lstar>[N] L_latent;
@@ -108,14 +142,16 @@ model {
   // setup for the integral
   real Lambda; // this is total Lambda!
   
-  real params[2];
+  real params[4];
   real integration_result[1,1];
   real state0[1];
 
+  vector[N_margin] dz_tilde;
 
   // positive definite priors for the intensity
   r0 ~ lognormal(log(100.0), 1.0);
-  index ~ normal(-1.0, 1.0);
+  rise ~ normal(0.0, 1.0);
+  decay ~ normal(0.0, 1.0);
   
   // priors for distributions
   alpha ~ normal(1.0, 1.0);
@@ -126,9 +162,9 @@ model {
   L_obs ~ lognormal(log(L_latent), sigma_L);
 
   // add the differential of the inhomogeneous process on
-  for (n in 1:N) {
-    target += log(dNdz(z_obs[n], r0, index));
-  }
+  
+  target += log(dNdz(z_obs, r0, rise, decay, peak));
+  
   
   
 
@@ -136,8 +172,8 @@ model {
   L_tilde_latent ~  pareto(Lstar, alpha);
 
   // normalize with the offset distributions
-  //  target += uniform_lpdf(z_tilde_latent| 0, z_max);
-  //target += uniform_lpdf(F_tilde |0,  boundary);
+  target += uniform_lpdf(z_tilde_latent| 0, z_max);
+  target += uniform_lpdf(F_tilde |0,  boundary);
 
   // these norms give me a headache
   // I'm not really sure if they are correct
@@ -147,10 +183,11 @@ model {
   log_prob_margin[1] = 0;
   sum_log_prob_tilde = log_prob_margin[1];
 
+  dz_tilde = log(dNdz(z_tilde_latent, r0, rise, decay, peak));
 
   for (n in 1:N_margin) {
     
-    sum_log_prob_tilde += log(dNdz(z_tilde_latent[n], r0, index))
+    sum_log_prob_tilde += dz_tilde[n]
       - uniform_lpdf(F_tilde[n] | 0, boundary) // remove excess prob
       - uniform_lpdf(z_tilde_latent[n]| 0, z_max) // remove excess prob
       + lognormal_lpdf(L_tilde_transformed[n] | log(L_tilde_latent[n]), sigma_L);
@@ -169,8 +206,10 @@ model {
   // Poisson normalization for the integral rate
 
   params[1] = r0;
-  params[2] = index;
- 
+  params[2] = rise;
+  params[3] = decay;
+  params[4] = peak;
+  
   state0[1] = 0.0;
   
   // integrate the dN/dz to get the normalizing constant for given r0 and alpha
@@ -187,7 +226,7 @@ generated quantities {
   real phi_model[N_model];
   
   for (i in 1:N_model) {
-    dNdz_model[i] = dNdz(zmodel[i], r0, index);
+    dNdz_model[i] = dNdz_int(zmodel[i], r0, rise, decay, peak);
     phi_model[i] = exp(pareto_lpdf(Lmodel[i]| Lstar, alpha));
   }
 }
