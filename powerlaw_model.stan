@@ -5,12 +5,12 @@ functions {
   // transform flux into luminosity
   // for now this is WRONG
   real transform(real x, real z) {
-    return x * (z+1)^2 ; 
+    return x * 4* pi() * (z+1)^2 ; 
   }
   
   
   // variable Poisson intensity
-  vector dNdz(vector z, real r0, real rise, real decay, real peak) {
+  vector dNdV(vector z, real r0, real rise, real decay, real peak) {
 
     int N = num_elements(z);
 
@@ -18,7 +18,7 @@ functions {
     vector[N] top;
     vector[N] frac;
 
-    top = r0 * (1.0 + z);
+    top = r0 * (1.0 + rise*z);
     frac = z/peak;
     for (n in 1:N) {
 
@@ -29,13 +29,26 @@ functions {
     return top ./ bottom;
   }
 
+
+
+  vector dVdz(vector z) {
+
+    return 4 * pi() * (z+1) .* (z+1);
+
+  }
+
+  real dVdz_int(real z) {
+
+    return 4 * pi() * (z+1) * (z+1);
+
+  }
   
- real dNdz_int(real z, real r0, real rise, real decay, real peak) {
+ real dNdV_int(real z, real r0, real rise, real decay, real peak) {
     real bottom;
     real  top;
     
 
-    top = r0 * (1.0 + z);
+    top = r0 * (1.0 + rise*z);
     bottom =1+(z/peak)^decay;
     
 
@@ -58,7 +71,7 @@ functions {
     peak = params[4];
     
     
-    dstatedz[1] = dNdz_int(z, r0, rise, decay, peak);
+    dstatedz[1] = dNdV_int(z, r0, rise, decay, peak) * dVdz_int(z);
     
     return dstatedz;
   }
@@ -76,6 +89,10 @@ data {
   vector[N] z_obs;
   real<lower=0> z_max;
 
+  real<lower=0> rise; // formation fall off
+  real<lower=0> decay; // formation fall off
+  real<lower=0, upper=z_max> peak; // formation fall off
+  
   // marginalization
   int<lower=0> N_margin;
   real boundary;
@@ -110,9 +127,9 @@ parameters {
   real<lower=0> alpha; // phi index 
   real<lower=0> Lstar; // phi lower bound
   real<lower=0> r0; // local rate
-  real<lower=0> rise; // formation fall off
-  real<lower=0> decay; // formation fall off
-  real<lower=0, upper=z_max> peak; // formation fall off
+  /* real<lower=0> rise; // formation fall off */
+  /* real<lower=0> decay; // formation fall off */
+  /* real<lower=0, upper=z_max> peak; // formation fall off */
 
   // latent luminosities
   vector<lower=Lstar>[N] L_latent;
@@ -125,12 +142,12 @@ parameters {
 }
 
 transformed parameters {
-    vector<lower=0>[N_margin] L_tilde_transformed;
+  //    vector<lower=0>[N_margin] L_tilde_transformed;
   
   // transform the flux into a luminosity
-  for (n in 1:N_margin) {
-    L_tilde_transformed[n] = transform(F_tilde[n], z_tilde_latent[n]);    
-  }
+  /* for (n in 1:N_margin) { */
+  /*   L_tilde_transformed[n] = transform(F_tilde[n], z_tilde_latent[n]);     */
+  /* } */
   
 
 }
@@ -149,9 +166,11 @@ model {
   vector[N_margin] dz_tilde;
 
   // positive definite priors for the intensity
-  r0 ~ lognormal(log(100.0), 1.0);
-  rise ~ normal(0.0, 1.0);
-  decay ~ normal(0.0, 1.0);
+  r0 ~ lognormal(log(1.), 1.0);
+  //  rise ~ normal(1.0, 1.0);
+  //  decay ~ normal(2.0, 2.0);
+  // peak ~lognormal(0.,1.);
+
   
   // priors for distributions
   alpha ~ normal(1.0, 1.0);
@@ -162,8 +181,10 @@ model {
   L_obs ~ lognormal(log(L_latent), sigma_L);
 
   // add the differential of the inhomogeneous process on
+
+  // remember that we are looking for dN/dz = (dN/dV) * (dV/dz)
   
-  target += log(dNdz(z_obs, r0, rise, decay, peak));
+  target += log(dNdV(z_obs, r0, rise, decay, peak) .* dVdz(z_obs));
   
   
   
@@ -183,14 +204,17 @@ model {
   log_prob_margin[1] = 0;
   sum_log_prob_tilde = log_prob_margin[1];
 
-  dz_tilde = log(dNdz(z_tilde_latent, r0, rise, decay, peak));
+  // it is vectorized so precompute it here.
+  dz_tilde = log(dNdV(z_tilde_latent, r0, rise, decay, peak) .* dVdz(z_tilde_latent));
 
   for (n in 1:N_margin) {
-    
+
+    real L_tilde_transformed = transform(F_tilde[n], z_tilde_latent[n]);    
+
     sum_log_prob_tilde += dz_tilde[n]
       - uniform_lpdf(F_tilde[n] | 0, boundary) // remove excess prob
       - uniform_lpdf(z_tilde_latent[n]| 0, z_max) // remove excess prob
-      + lognormal_lpdf(L_tilde_transformed[n] | log(L_tilde_latent[n]), sigma_L);
+      + lognormal_lpdf(L_tilde_transformed | log(L_tilde_latent[n]), sigma_L);
 
       
      
@@ -222,11 +246,11 @@ model {
 }
 
 generated quantities {
-  real dNdz_model[N_model];
+  real dNdV_model[N_model];
   real phi_model[N_model];
   
   for (i in 1:N_model) {
-    dNdz_model[i] = dNdz_int(zmodel[i], r0, rise, decay, peak);
+    dNdV_model[i] = dNdV_int(zmodel[i], r0, rise, decay, peak);
     phi_model[i] = exp(pareto_lpdf(Lmodel[i]| Lstar, alpha));
   }
 }
